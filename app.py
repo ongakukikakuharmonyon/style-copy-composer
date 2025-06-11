@@ -1,11 +1,12 @@
-# app.py (分析結果を表示する「司令室」バージョン)
+# -*- coding: utf-8 -*-
+# app.py (文字コード対応・最終版)
 
 import streamlit as st
 import tempfile
 import os
 import json # JSONをきれいに表示するためにインポート
 
-# 1. インポートする関数名を、新しい名前に変更！
+# インポートする関数名を、新しい名前に変更！
 from analyzer import analyze_song_structure
 # MelodyComposer と note_states_to_musicxml は一旦使わない
 
@@ -26,13 +27,13 @@ if uploaded_file is not None:
             tmp_file.write(uploaded_file.getbuffer())
             input_tmp_path = tmp_file.name
 
-        # 2. 楽曲分析を実行し、「設計図」を取得
+        # 楽曲分析を実行し、「設計図」を取得
         with st.spinner("楽曲の構造を解析中..."):
             song_profile = analyze_song_structure(input_tmp_path)
         
         st.success("✅ 楽曲分析が完了しました！")
 
-        # 3. 分析結果（設計図）を画面に表示
+        # 分析結果（設計図）を画面に表示
         if "error" in song_profile:
             st.error(f"分析中にエラーが発生しました: {song_profile['error']}")
         else:
