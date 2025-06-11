@@ -1,61 +1,79 @@
 # -*- coding: utf-8 -*-
-# app.py (文字コード対応・最終版)
+# analyzer.py (専門的解剖を行う、真の最終形態)
 
-import streamlit as st
-import tempfile
-import os
-import json # JSONをきれいに表示するためにインポート
+from typing import List, Dict, Any
+from music21 import converter, stream, clef, instrument, meter, key, chord, note
 
-# インポートする関数名を、新しい名前に変更！
-from analyzer import analyze_song_structure
-# MelodyComposer と note_states_to_musicxml は一旦使わない
-
-st.set_page_config(page_title="Style-Copy Composer", layout="wide")
-
-st.title("🎼 Style-Copy Composer (v2.0: 構造分析モード)")
-st.markdown("MusicXMLファイルをアップロードして、その楽曲構造（設計図）を分析します。")
-
-uploaded_file = st.file_uploader(
-    "🎵 MusicXMLファイル (.xml, .musicxml) をアップロード", 
-    type=["xml", "musicxml"]
-)
-
-if uploaded_file is not None:
-    input_tmp_path = None
+def analyze_song_structure(xml_path: str) -> Dict[str, Any]:
+    """
+    MusicXMLファイルを構造的に解剖し、人間が理解できる「設計図」を生成する。
+    """
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".xml") as tmp_file:
-            tmp_file.write(uploaded_file.getbuffer())
-            input_tmp_path = tmp_file.name
+        score = converter.parse(xml_path)
+    except Exception as e:
+        return {"error": f"ファイル解析に失敗しました: {e}"}
 
-        # 楽曲分析を実行し、「設計図」を取得
-        with st.spinner("楽曲の構造を解析中..."):
-            song_profile = analyze_song_structure(input_tmp_path)
-        
-        st.success("✅ 楽曲分析が完了しました！")
+    # 1. 楽曲全体の基本情報を抽出
+    song_profile: Dict[str, Any] = {
+        "key": "N/A",
+        "time_signature": "N/A",
+        "chord_progression": [],
+        "parts": []
+    }
 
-        # 分析結果（設計図）を画面に表示
-        if "error" in song_profile:
-            st.error(f"分析中にエラーが発生しました: {song_profile['error']}")
+    try:
+        song_profile["key"] = score.analyze('key').name
+        ts = score.flat.getElementsByClass(meter.TimeSignature).first()
+        if ts:
+            song_profile["time_signature"] = f"{ts.numerator}/{ts.denominator}"
         else:
-            st.header("楽曲の設計図 (Song Profile)")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                st.metric("調 (Key)", song_profile.get("key", "N/A"))
-            with col2:
-                st.metric("拍子 (Time Signature)", song_profile.get("time_signature", "N/A"))
-            
-            st.subheader("コード進行 (Chord Progression)")
-            st.text(" -> ".join(song_profile.get("chord_progression", [])))
-            
-            st.subheader("パート詳細 (Parts)")
-            for i, part in enumerate(song_profile.get("parts", [])):
-                with st.expander(f"パート {i+1}: {part.get('part_name', 'Unnamed')} ({part.get('instrument', 'N/A')})"):
-                    st.write(f"**音部記号 (Clef):** {part.get('clef', 'N/A')}")
-                    st.write(f"**ノート数:** {len(part.get('note_sequence', []))}")
-                    # ノートシーケンスの最初の10件だけ表示
-                    st.json(part.get('note_sequence', [])[:10])
+            song_profile["time_signature"] = "4/4" # デフォルト
+    except Exception as e:
+        print(f"Key/Time signature analysis failed: {e}")
 
-    finally:
-        if input_tmp_path and os.path.exists(input_tmp_path):
-            os.remove(input_tmp_path)
+    # 2.【改善】人間が読めるコード進行を抽出
+    try:
+        chordified_score = score.chordify()
+        prog = []
+        for ch in chordified_score.flat.getElementsByClass('Chord'):
+            # 最も一般的でシンプルなコード名を取得する
+            chord_name = ch.figure
+            prog.append(chord_name)
+        
+        # 連続する同じコードをまとめる
+        if prog:
+            final_progression = [prog[0]]
+            for i in range(1, len(prog)):
+                if prog[i] != final_progression[-1]:
+                    final_progression.append(prog[i])
+            song_profile["chord_progression"] = final_progression
+            
+    except Exception as e:
+        print(f"Chord analysis failed: {e}")
+
+    # 3.【最重要】各パートを、音部記号を含めて精密に解剖
+    for part_elem in score.parts:
+        # このパートの最初の音部記号を、より確実に探し出す
+        first_clef = part_elem.recurse().getElementsByClass(clef.Clef).first()
+        
+        part_info = {
+            "part_name": part_elem.partName or f"Part {len(song_profile['parts']) + 1}",
+            "instrument": (part_elem.getInstrument().instrumentName if part_elem.getInstrument() else "Unknown"),
+            "clef": (first_clef.name if first_clef else "unknown"), # 確実に音部記号を記録
+            "note_sequence": []
+        }
+        
+        # パート内の音符/和音/休符を抽出
+        for elem in part_elem.recurse():
+            if isinstance(elem, note.Note):
+                part_info["note_sequence"].append(('Note', elem.pitch.nameWithOctave, float(elem.quarterLength)))
+            elif isinstance(elem, chord.Chord):
+                # 和音は構成音をすべて記録する（後で使えるように）
+                chord_notes = [p.nameWithOctave for p in elem.pitches]
+                part_info["note_sequence"].append(('Chord', chord_notes, float(elem.quarterLength)))
+            elif isinstance(elem, note.Rest):
+                part_info["note_sequence"].append(('Rest', 'Rest', float(elem.quarterLength)))
+
+        song_profile["parts"].append(part_info)
+        
+    return song_profile
